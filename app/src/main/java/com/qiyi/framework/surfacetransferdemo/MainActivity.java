@@ -18,6 +18,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.util.Log;
 import android.view.InputEvent;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SurfaceView;
 import android.view.View;
@@ -32,7 +33,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity  {
 	private final String TAG = "SurfaceDemo.MainActivity";
 	private boolean mView1Enable = true;
 	private final static String[] REQUIRE_PERMISSIONS = {
@@ -117,30 +118,35 @@ public class MainActivity extends AppCompatActivity {
 			public void onClick(View view) {
 				//toggle surface change action.
 				Log.e(TAG, "toggle onClick enter ");
-				if (mSurfaceTransfer == null) return ;
-				try {
-					mView1Enable = !mView1Enable;
-					if (mView1Enable) {
-						mSurfaceTransfer.setSurface(null,0,0, 0);
-						mSurfaceTransfer.setSurface(mView1.getHolder().getSurface(),mView1.getWidth(), mView1.getHeight(), 0);
-						Log.e(TAG, "A Surface Using ");
-					} else {
-						mSurfaceTransfer.setSurface(null,0,0, 0);
-						mSurfaceTransfer.setSurface(mView2.getHolder().getSurface(),mView2.getWidth(),mView2.getHeight(), 0);
-						Log.e(TAG, "B Surface Using ");
-					}
-				} catch (RemoteException e) {
-					e.printStackTrace();
-				}
+				updateSurface();
 			}
 		});
+		reStartService();
+	}
+	private void updateSurface() {
+		if (mSurfaceTransfer == null) return ;
+		try {
+			mView1Enable = !mView1Enable;
+			if (mView1Enable) {
+				mSurfaceTransfer.setSurface(null,0,0, 0);
+				mSurfaceTransfer.setSurface(mView1.getHolder().getSurface(),mView1.getWidth(), mView1.getHeight(), 0);
+				Log.e(TAG, "A Surface Using ");
+			} else {
+				mSurfaceTransfer.setSurface(null,0,0, 0);
+				mSurfaceTransfer.setSurface(mView2.getHolder().getSurface(),mView2.getWidth(),mView2.getHeight(), 0);
+				Log.e(TAG, "B Surface Using ");
+			}
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+	}
+	private void reStartService() {
+		Log.e(TAG, "reStartService ");
 		Intent intent = new Intent();
 		intent.setAction("com.qiyi.framework.BIND");
 		intent.setComponent(new ComponentName("com.qiyi.framework.surfacetransferservice",
 				"com.qiyi.framework.surfacetransferservice.AIDLSurfaceTransferService"));
 		bindService(intent, mServiceConn, Context.BIND_AUTO_CREATE);
-
-
 	}
 	private RectF[] mVirtualRect = new RectF[2];
 	private static RectF calcViewScreenLocation(View view) {
@@ -157,6 +163,67 @@ public class MainActivity extends AppCompatActivity {
 			Log.i(TAG, "VirtualRect " + mVirtualRect.toString());
 		}
 	}
+	private int mMagicSource = 0x55ff;
+	private InjectEvent mInjectEvent = new InjectEvent();
+	@Override
+	public boolean onKeyDown(int keyCode, KeyEvent event) {
+		Log.d(TAG,"Event " + event.toString());
+		if (event.getSource() == mMagicSource) return false;
+		event.setSource(mMagicSource);
+
+		try {
+			mInjectEvent.prepareEvent(event, 1);
+			//new Thread(mInjectEvent).start();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+		return false;
+	}
+	@Override
+	public boolean onKeyUp(int keyCode, KeyEvent event) {
+		Log.d(TAG,"Event " + event.toString());
+		if (event.getSource() == mMagicSource) return false;
+		event.setSource(mMagicSource);
+		try {
+			mInjectEvent.prepareEvent(event, 2);
+			new Thread(mInjectEvent).start();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
+	}
+	class InjectEvent implements Runnable{
+		InputEvent mEventDown = null;
+		InputEvent mEventUp = null;
+		InputEvent mEventMotion = null;
+		int mLastIdx = 2;
+
+		public void prepareEvent(InputEvent event, int idx) {
+			if (idx == 1) {
+				mEventDown = event;
+			}
+			if (idx == 2) {
+				mEventUp = event;
+			}
+			if (idx ==3) {
+				mEventMotion = event;
+			}
+			mLastIdx = idx;
+		}
+		public void run(){
+			try {
+				if (mLastIdx == 3) {
+					mSurfaceTransfer.injectEvent(mEventMotion);
+				} else {
+					mSurfaceTransfer.injectEvent(mEventDown);
+					mSurfaceTransfer.injectEvent(mEventUp);
+				}
+			} catch (RemoteException e) {
+				e.printStackTrace();
+			}
+		}
+	}
 	@Override
 	public boolean onTouchEvent(MotionEvent event){
 		// Be sure to call the superclass implementation
@@ -171,8 +238,9 @@ public class MainActivity extends AppCompatActivity {
 			cloneEvent.offsetLocation(-rect.left, -rect.top);
 			Log.d(TAG,"Event , convent : " + cloneEvent.toString());
 			try {
-				mSurfaceTransfer.injectEvent(cloneEvent);
-			} catch (RemoteException e) {
+				mInjectEvent.prepareEvent(cloneEvent, 3);
+				new Thread(mInjectEvent).start();
+			} catch (Exception e) {
 				e.printStackTrace();
 			}
 		}
@@ -200,15 +268,40 @@ public class MainActivity extends AppCompatActivity {
 			}
 		}
 		public void onServiceDisconnected(ComponentName name) {
+			try {
+				mSurfaceTransfer.release();
+			}
+			catch (RemoteException e) {
+				e.printStackTrace();
+			}
 			mSurfaceTransfer = null;
+			Log.e(TAG, "onServiceDisconnected ,!!!!!!!!!!!![Eelle]Died");
 		}
 	};
 
 
 	@Override
 	protected void onResume() {
+		Log.e(TAG, "onResume");
 		super.onResume();
+		if (mServiceConn != null)
+		unbindService(mServiceConn);
+		mSurfaceTransfer = null;
 
+		reStartService();
+		updateSurface();
+
+	}
+	@Override
+	protected void onStop() {
+		super.onResume();
+		Log.e(TAG, "onStop");
+		try {
+			mSurfaceTransfer.release();
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+		mSurfaceTransfer = null;
 	}
 	@Override
 	public boolean onCreateOptionsMenu(Menu menu) {
